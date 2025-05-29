@@ -586,8 +586,8 @@ export default function VoiceRoom() {
 
   // Initialize Socket.io connection with mobile-optimized settings
   useEffect(() => {
-    // const serverUrl = "https://68f8-2405-201-a42a-3010-edab-e53c-f945-204b.ngrok-free.app"
-    const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001"
+    const serverUrl = "https://voice-chat-server-o76j.onrender.com"
+    // const serverUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001"
     console.log("🔌 Connecting to server:", serverUrl, "Mobile:", isMobile)
 
     socketRef.current = io(serverUrl, {
