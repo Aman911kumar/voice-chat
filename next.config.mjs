@@ -9,12 +9,20 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  allowedDevOrigins: [
-    'http://localhost:3000',
-    'http://192.168.29.138:3000',
-    'https://192.168.29.138:3001',
-    'http://192.168.29.138:3001',
-  ],
+  // For Next.js 14, we use async headers() instead of allowedDevOrigins
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'Access-Control-Allow-Origin',
+            value: '*',
+          },
+        ],
+      },
+    ]
+  },
 }
 
 export default nextConfig
