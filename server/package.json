@@ -10,11 +10,10 @@
     "https-start": "USE_HTTPS=true node server.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "selfsigned": "^2.1.1",
     "socket.io": "^4.7.2",
-    "socket.io-client": "^4.8.1"
+    "cors": "^2.8.5",
+    "selfsigned": "^2.1.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

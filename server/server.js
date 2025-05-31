@@ -5,77 +5,35 @@ const socketIo = require("socket.io")
 const fs = require("fs")
 const path = require("path")
 const cors = require("cors")
-const { log } = require("console")
-
-// Create HTTPS server with self-signed certificate for development
 
 const app = express()
 
-// Check if HTTPS should be used based on environment variable
-const useHTTPS = process.env.USE_HTTPS === "true"  // Only true when explicitly set in the .env
-
+// Create HTTPS server with self-signed certificate for development
 let server
-const certPath = path.join(__dirname, "localhost.pem")
-const keyPath = path.join(__dirname, "localhost-key.pem")
-
-
-// Generate and use self-signed certificate only if needed
-let httpsOptions = {}
+const useHTTPS = process.env.USE_HTTPS === "true"
 
 if (useHTTPS) {
-  // Check if certs already exist
-  if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
-    // Use existing certs
-    httpsOptions = {
-      key: fs.readFileSync(keyPath),
-      cert: fs.readFileSync(certPath),
-    }
-  } else {
-    // Generate new certs with self-signed
-    const selfsigned = require("selfsigned")
-    const attrs = [
-      { name: "commonName", value: "localhost" },
-      { name: "subjectAltName", value: "DNS:localhost,IP:127.0.0.1,IP:0.0.0.0" },
-    ]
-    const pems = selfsigned.generate(attrs, {
-      days: 365,
-      keySize: 2048,
-      extensions: [
-        {
-          name: "subjectAltName",
-          altNames: [
-            { type: 2, value: "localhost" },
-            { type: 7, ip: "127.0.0.1" },
-            { type: 7, ip: "0.0.0.0" },
-            { type: 2, value: "*.local" },
-          ],
-        },
-      ],
-    })
+  // Create self-signed certificate for development
+  const selfsigned = require("selfsigned")
+  const attrs = [{ name: "commonName", value: "localhost" }]
+  const pems = selfsigned.generate(attrs, { days: 365 })
 
-    // Write certs to disk for future use
-    fs.writeFileSync(certPath, pems.cert)
-    fs.writeFileSync(keyPath, pems.private)
-
-    httpsOptions = {
-      key: pems.private,
-      cert: pems.cert,
-    }
+  const httpsOptions = {
+    key: pems.private,
+    cert: pems.cert,
   }
 
-  // Create HTTPS server with the generated or existing cert
   server = https.createServer(httpsOptions, app)
-  console.log("🔒 HTTPS server enabled with enhanced certificate")
+  console.log("🔒 HTTPS server enabled")
 } else {
-  // Create HTTP server if HTTPS is not enabled
   server = http.createServer(app)
   console.log("🔓 HTTP server enabled")
 }
 
-// Set up Socket.IO with mobile support, enhanced for HTTPS
+// Enhanced Socket.io configuration for mobile support
 const io = socketIo(server, {
   cors: {
-    origin: "*", // Allow all origins for local dev
+    origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: false,
     allowedHeaders: ["*"],
@@ -89,38 +47,6 @@ const io = socketIo(server, {
   httpCompression: true,
   perMessageDeflate: true,
 })
-
-// Set up CORS middleware for Express app
-app.use(
-  cors({
-    origin: "*", // Allow all origins for local dev
-    credentials: false,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["*"],
-  })
-)
-
-// Handle preflight requests for CORS
-app.options("*", (req, res) => {
-  res.header("Access-Control-Allow-Origin", "*")
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-  res.header("Access-Control-Allow-Headers", "*")
-  res.sendStatus(200)
-})
-
-// Example of a route to test
-app.get("/", (req, res) => {
-  res.send("Hello, world!")
-})
-
-
-// Client-side connection logic (for reference)
-// const socket = io("https://localhost:3001", {
-//   transports: ["websocket", "polling"],
-//   secure: useHTTPS, // HTTPS connection when useHTTPS is true
-//   rejectUnauthorized: false, // Trust self-signed certs for local dev
-// })
-
 
 // Enhanced middleware for mobile support
 app.use(
@@ -149,19 +75,29 @@ if (!fs.existsSync(recordingsDir)) {
   fs.mkdirSync(recordingsDir, { recursive: true })
 }
 
+// Helper to get a room's folder
+function getRoomFolder(roomId) {
+  const folder = path.join(recordingsDir, `room-${roomId}`)
+  if (!fs.existsSync(folder)) {
+    fs.mkdirSync(folder, { recursive: true })
+  }
+  return folder
+}
+
 // In-memory storage for rooms and recordings
 const rooms = new Map()
 const userSockets = new Map()
 
-// Room data structure - ENHANCED for separate user recordings
+// Room data structure
 class Room {
   constructor(id) {
     this.id = id
     this.users = new Map() // Changed to Map for better user management
     this.isRecording = false
+    this.recordingChunks = []
     this.recordingStartTime = null
-    this.recordingSession = null // Will store session info
-    this.userRecordings = new Map() // Separate recordings per user
+    this.recordingFilePath = null
+    this.recordingStream = null
     this.lastActivity = Date.now()
   }
 
@@ -176,11 +112,6 @@ class Room {
     this.lastActivity = Date.now()
     if (removed) {
       console.log(`👥 Room ${this.id}: Removed user ${userId}. Total users: ${this.users.size}`)
-
-      // Stop individual recording for this user if recording is active
-      if (this.isRecording && this.userRecordings.has(userId)) {
-        this.stopUserRecording(userId)
-      }
     }
     return removed
   }
@@ -208,225 +139,6 @@ class Room {
       }
     }
     return null
-  }
-
-  // Start recording session for all users
-  startRecordingSession() {
-    this.isRecording = true
-    this.recordingStartTime = new Date()
-
-    const timestamp = this.recordingStartTime.toISOString().replace(/[:.]/g, "-")
-    this.recordingSession = {
-      id: `session-${this.id}-${timestamp}`,
-      startTime: this.recordingStartTime,
-      timestamp: timestamp,
-      users: Array.from(this.users.keys()),
-    }
-
-    // Initialize recording for each user currently in the room
-    this.users.forEach((user, userId) => {
-      this.startUserRecording(userId)
-    })
-
-    console.log(`🎙️ Started recording session: ${this.recordingSession.id}`)
-    return this.recordingSession
-  }
-
-  // Start recording for a specific user
-  startUserRecording(userId) {
-    if (!this.isRecording || this.userRecordings.has(userId)) {
-      return false
-    }
-
-    const userRecording = {
-      userId: userId,
-      chunks: [],
-      startTime: Date.now(),
-      filePath: path.join(recordingsDir, `${this.recordingSession.id}-user-${userId}.webm`),
-      stream: null,
-    }
-
-    try {
-      userRecording.stream = fs.createWriteStream(userRecording.filePath)
-      this.userRecordings.set(userId, userRecording)
-      console.log(`🎤 Started recording for user ${userId}: ${userRecording.filePath}`)
-      return true
-    } catch (error) {
-      console.error(`❌ Error starting recording for user ${userId}:`, error)
-      return false
-    }
-  }
-
-  // Stop recording for a specific user
-  stopUserRecording(userId) {
-    const userRecording = this.userRecordings.get(userId)
-    if (!userRecording) {
-      return null
-    }
-
-    // Close the write stream
-    if (userRecording.stream) {
-      userRecording.stream.end()
-      userRecording.stream = null
-    }
-
-    // Combine chunks and save final file
-    if (userRecording.chunks.length > 0) {
-      try {
-        const sortedChunks = userRecording.chunks.sort((a, b) => (a.index || 0) - (b.index || 0))
-        const combinedBuffer = Buffer.concat(sortedChunks.map((chunk) => chunk.data))
-
-        // Write final file if stream didn't capture everything
-        if (!fs.existsSync(userRecording.filePath) || fs.statSync(userRecording.filePath).size === 0) {
-          fs.writeFileSync(userRecording.filePath, combinedBuffer)
-        }
-
-        console.log(
-          `💾 Saved recording for user ${userId}: ${userRecording.filePath} (${combinedBuffer.length} bytes, ${userRecording.chunks.length} chunks)`,
-        )
-
-        const result = {
-          userId: userId,
-          filePath: userRecording.filePath,
-          filename: path.basename(userRecording.filePath),
-          size: combinedBuffer.length,
-          chunks: userRecording.chunks.length,
-          duration: Date.now() - userRecording.startTime,
-          base64: combinedBuffer.toString("base64"),
-        }
-
-        this.userRecordings.delete(userId)
-        return result
-      } catch (error) {
-        console.error(`❌ Error saving recording for user ${userId}:`, error)
-        this.userRecordings.delete(userId)
-        return null
-      }
-    } else {
-      console.log(`⚠️ No audio chunks for user ${userId}`)
-      this.userRecordings.delete(userId)
-      return null
-    }
-  }
-
-  // Stop entire recording session
-  stopRecordingSession() {
-    if (!this.isRecording) {
-      return { success: false, error: "No recording in progress" }
-    }
-
-    this.isRecording = false
-    const results = []
-
-    // Stop recording for all users
-    this.userRecordings.forEach((recording, userId) => {
-      const result = this.stopUserRecording(userId)
-      if (result) {
-        results.push(result)
-      }
-    })
-
-    // Create session summary
-    const sessionSummary = {
-      sessionId: this.recordingSession.id,
-      roomId: this.id,
-      startTime: this.recordingSession.startTime,
-      endTime: new Date(),
-      duration: Date.now() - this.recordingSession.startTime,
-      userRecordings: results,
-      totalFiles: results.length,
-      totalSize: results.reduce((sum, r) => sum + r.size, 0),
-    }
-
-    // Save session summary
-    const summaryPath = path.join(recordingsDir, `${this.recordingSession.id}-summary.json`)
-    try {
-      fs.writeFileSync(summaryPath, JSON.stringify(sessionSummary, null, 2))
-      console.log(`📋 Saved session summary: ${summaryPath}`)
-    } catch (error) {
-      console.error(`❌ Error saving session summary:`, error)
-    }
-
-    console.log(`⏹️ Stopped recording session: ${this.recordingSession.id}`)
-    console.log(`📊 Session results: ${results.length} user recordings, ${sessionSummary.totalSize} total bytes`)
-
-    this.recordingSession = null
-    return { success: true, session: sessionSummary, userRecordings: results }
-  }
-
-  // Add audio chunk for a specific user
-  addUserAudioChunk(userId, audioData, chunkIndex) {
-    const userRecording = this.userRecordings.get(userId)
-    if (!userRecording) {
-      // If user joined during recording, start their recording
-      if (this.isRecording && this.users.has(userId)) {
-        this.startUserRecording(userId)
-        return this.addUserAudioChunk(userId, audioData, chunkIndex) // Retry
-      }
-      return false
-    }
-
-    try {
-      const buffer = Buffer.from(audioData, "base64")
-
-      // Store in memory
-      userRecording.chunks.push({
-        data: buffer,
-        timestamp: Date.now(),
-        index: chunkIndex || userRecording.chunks.length,
-      })
-
-      // Write to file stream
-      if (userRecording.stream && userRecording.stream.writable) {
-        userRecording.stream.write(buffer)
-      }
-
-      console.log(
-        `🎵 Added audio chunk for user ${userId}: ${buffer.length} bytes (Total chunks: ${userRecording.chunks.length})`,
-      )
-      return true
-    } catch (error) {
-      console.error(`❌ Error adding audio chunk for user ${userId}:`, error)
-      return false
-    }
-  }
-
-  // Get current recording data for a user
-  getUserRecordingData(userId) {
-    const userRecording = this.userRecordings.get(userId)
-    if (!userRecording || userRecording.chunks.length === 0) {
-      return null
-    }
-
-    try {
-      const sortedChunks = userRecording.chunks.sort((a, b) => (a.index || 0) - (b.index || 0))
-      const combinedBuffer = Buffer.concat(sortedChunks.map((chunk) => chunk.data))
-
-      return {
-        userId: userId,
-        audioData: combinedBuffer.toString("base64"),
-        size: combinedBuffer.length,
-        chunks: userRecording.chunks.length,
-        mimeType: "audio/webm",
-      }
-    } catch (error) {
-      console.error(`❌ Error getting recording data for user ${userId}:`, error)
-      return null
-    }
-  }
-
-  // Get recording status
-  getRecordingStatus() {
-    return {
-      isRecording: this.isRecording,
-      session: this.recordingSession,
-      activeRecordings: Array.from(this.userRecordings.keys()),
-      userRecordingStats: Array.from(this.userRecordings.entries()).map(([userId, recording]) => ({
-        userId,
-        chunks: recording.chunks.length,
-        size: recording.chunks.reduce((sum, chunk) => sum + chunk.data.length, 0),
-      })),
-    }
   }
 }
 
@@ -499,6 +211,16 @@ io.on("connection", (socket) => {
       timestamp: Date.now(),
     })
 
+    // If room is currently recording, notify the new user
+    if (room.isRecording) {
+      console.log(`🎙️ Room ${roomId} is recording, notifying new user ${userId}`)
+      socket.emit("recording-started", {
+        roomId,
+        timestamp: room.recordingStartTime,
+        isExistingRecording: true
+      })
+    }
+
     console.log(`✅ User ${userId} joined room ${roomId}. Total users: ${room.getUserCount()}`)
     console.log(
       `📋 Room ${roomId} users:`,
@@ -510,6 +232,7 @@ io.on("connection", (socket) => {
       roomId,
       totalUsers: room.getUserCount(),
       users: room.getUsers(),
+      isRecording: room.isRecording
     })
   })
 
@@ -548,6 +271,12 @@ io.on("connection", (socket) => {
           }
         }
         rooms.delete(roomId)
+        // Delete room folder
+        const roomFolder = getRoomFolder(roomId)
+        if (fs.existsSync(roomFolder)) {
+          fs.rmSync(roomFolder, { recursive: true, force: true })
+          console.log(`🗑️ Room folder deleted: ${roomFolder}`)
+        }
         console.log(`🗑️ Room ${roomId} deleted (empty)`)
       }
     }
@@ -556,7 +285,7 @@ io.on("connection", (socket) => {
     userSockets.delete(socket.id)
   })
 
-  // Start recording - UPDATED
+  // Start recording
   socket.on("start-recording", (data) => {
     const { roomId } = data
     console.log(`🎙️ Start recording request for room ${roomId}`)
@@ -565,36 +294,37 @@ io.on("connection", (socket) => {
       const room = rooms.get(roomId)
 
       if (!room.isRecording) {
-        const session = room.startRecordingSession()
+        room.isRecording = true
+        room.recordingChunks = []
+        room.recordingStartTime = new Date()
+
+        const timestamp = room.recordingStartTime.toISOString().replace(/[:.]/g, "-")
+        // Always use the room folder for the file
+        const roomFolder = getRoomFolder(roomId)
+        room.recordingFilePath = path.join(roomFolder, `room-${roomId}-${timestamp}.webm`)
+
+        // Create write stream for real-time saving
+        try {
+          room.recordingStream = fs.createWriteStream(room.recordingFilePath)
+          console.log(`📁 Recording stream created: ${room.recordingFilePath}`)
+        } catch (error) {
+          console.error(`❌ Error creating recording stream: ${error}`)
+        }
 
         // Notify all users in the room
-        io.to(roomId).emit("recording-started", {
-          roomId,
-          sessionId: session.id,
-          timestamp: session.startTime,
-        })
+        io.to(roomId).emit("recording-started", { roomId, timestamp })
 
-        socket.emit("recording-start-response", {
-          success: true,
-          sessionId: session.id,
-          message: `Started recording session for ${room.getUserCount()} users`,
-        })
-        console.log(`✅ Recording started for room ${roomId}, session: ${session.id}`)
+        socket.emit("recording-start-response", { success: true })
+        console.log(`✅ Recording started for room ${roomId}`)
       } else {
-        socket.emit("recording-start-response", {
-          success: false,
-          error: "Recording already in progress",
-        })
+        socket.emit("recording-start-response", { success: false, error: "Recording already in progress" })
       }
     } else {
-      socket.emit("recording-start-response", {
-        success: false,
-        error: "Room not found",
-      })
+      socket.emit("recording-start-response", { success: false, error: "Room not found" })
     }
   })
 
-  // Stop recording - UPDATED
+  // Stop recording
   socket.on("stop-recording", (data) => {
     const { roomId } = data
     console.log(`⏹️ Stop recording request for room ${roomId}`)
@@ -603,93 +333,93 @@ io.on("connection", (socket) => {
       const room = rooms.get(roomId)
 
       if (room.isRecording) {
-        const result = room.stopRecordingSession()
+        const recordingData = stopRoomRecording(roomId)
 
-        if (result.success) {
-          // Notify all users in the room
-          io.to(roomId).emit("recording-stopped", {
-            roomId,
-            sessionId: result.session.sessionId,
-            userRecordings: result.userRecordings.map((r) => ({
-              userId: r.userId,
-              filename: r.filename,
-              size: r.size,
-              chunks: r.chunks,
-            })),
-            totalFiles: result.session.totalFiles,
-            totalSize: result.session.totalSize,
-          })
-
-          socket.emit("recording-stop-response", {
-            success: true,
-            session: result.session,
-            userRecordings: result.userRecordings,
-            message: `Stopped recording session. Created ${result.userRecordings.length} individual recordings.`,
-          })
-
-          console.log(`✅ Recording stopped for room ${roomId}. Created ${result.userRecordings.length} files.`)
-        } else {
-          socket.emit("recording-stop-response", result)
-        }
-      } else {
-        socket.emit("recording-stop-response", {
-          success: false,
-          error: "No recording in progress",
+        // Notify all users in the room
+        io.to(roomId).emit("recording-stopped", {
+          roomId,
+          recordingSize: recordingData.size,
+          filename: recordingData.filename,
         })
+
+        // Send recording data to all users in the room
+        if (recordingData.base64 && recordingData.size > 0) {
+          io.to(roomId).emit("recording-stop-response", {
+            success: true,
+            audioData: recordingData.base64,
+            recordingSize: recordingData.size,
+            mimeType: "audio/webm",
+            filename: recordingData.filename,
+          })
+        } else {
+          io.to(roomId).emit("recording-stop-response", {
+            success: false,
+            error: "No recording data available"
+          })
+        }
+
+        console.log(
+          `✅ Recording stopped for room ${roomId}. File: ${recordingData.filename} (${recordingData.size} bytes)`,
+        )
+      } else {
+        io.to(roomId).emit("recording-stop-response", { success: false, error: "No recording in progress" })
       }
     } else {
-      socket.emit("recording-stop-response", {
-        success: false,
-        error: "Room not found",
-      })
+      io.to(roomId).emit("recording-stop-response", { success: false, error: "Room not found" })
     }
   })
 
-  // Receive audio chunk - UPDATED for user-specific recording
+  // Receive audio chunk - Enhanced for mobile
   socket.on("audio-chunk", (data) => {
     const { roomId, audioData, chunkIndex } = data
-    const userInfo = userSockets.get(socket.id)
-
-    if (!userInfo) {
-      socket.emit("audio-chunk-received", {
-        success: false,
-        error: "User not found in room",
-      })
-      return
-    }
-
-    const { userId } = userInfo
 
     if (rooms.has(roomId)) {
       const room = rooms.get(roomId)
       room.updateActivity()
 
       if (room.isRecording && audioData) {
-        const success = room.addUserAudioChunk(userId, audioData, chunkIndex)
+        try {
+          // Convert base64 to buffer
+          const buffer = Buffer.from(audioData, "base64")
 
-        if (success) {
-          const userRecording = room.userRecordings.get(userId)
+          // Store in memory for later retrieval
+          room.recordingChunks.push({
+            data: buffer,
+            timestamp: Date.now(),
+            index: chunkIndex || room.recordingChunks.length,
+          })
+
+          // Write to file stream for real-time saving
+          if (room.recordingStream && room.recordingStream.writable) {
+            room.recordingStream.write(buffer)
+          }
+
+          console.log(
+            `🎵 Received audio chunk for room ${roomId}: ${buffer.length} bytes (Total chunks: ${room.recordingChunks.length})`,
+          )
+
+          // Send confirmation back to client
           socket.emit("audio-chunk-received", {
             success: true,
-            chunkIndex: chunkIndex || (userRecording ? userRecording.chunks.length - 1 : 0),
-            totalChunks: userRecording ? userRecording.chunks.length : 0,
-            userId: userId,
+            chunkIndex: chunkIndex || room.recordingChunks.length - 1,
+            totalChunks: room.recordingChunks.length,
           })
 
-          // Broadcast to other users for real-time audio (unchanged)
+          // Broadcast to other users for real-time audio
           socket.to(roomId).emit("audio-data", {
-            userId: userId,
+            userId: userSockets.get(socket.id)?.userId,
             audioData,
           })
-        } else {
+        } catch (error) {
+          console.error("❌ Error processing audio chunk:", error)
           socket.emit("audio-chunk-received", {
             success: false,
-            error: "Failed to add audio chunk",
-            userId: userId,
+            error: error.message,
           })
         }
       } else {
         if (!room.isRecording) {
+          console.log(`⚠️ Audio chunk received but recording not active for room ${roomId}`)
           socket.emit("audio-chunk-received", {
             success: false,
             error: "Recording not active",
@@ -699,66 +429,42 @@ io.on("connection", (socket) => {
     }
   })
 
-  // Get current recording - UPDATED for user-specific data
+  // Get current recording
   socket.on("get-recording", (data) => {
-    const { roomId, userId: requestedUserId } = data
-    const userInfo = userSockets.get(socket.id)
-
-    if (!userInfo) {
-      socket.emit("get-recording-response", { success: false, error: "User not found" })
-      return
-    }
-
-    const { userId } = userInfo
-    const targetUserId = requestedUserId || userId // Default to requesting user's own recording
-
-    console.log(`📥 Get recording request for room ${roomId}, user ${targetUserId}`)
+    const { roomId } = data
+    console.log(`📥 Get recording request for room ${roomId}`)
 
     if (rooms.has(roomId)) {
       const room = rooms.get(roomId)
-      const recordingData = room.getUserRecordingData(targetUserId)
 
-      if (recordingData) {
-        socket.emit("get-recording-response", {
+      if (room.recordingChunks.length > 0) {
+        // Sort chunks by index to ensure proper order
+        const sortedChunks = room.recordingChunks.sort((a, b) => (a.index || 0) - (b.index || 0))
+        const combinedBuffer = Buffer.concat(sortedChunks.map((chunk) => chunk.data))
+        const base64Audio = combinedBuffer.toString("base64")
+
+        // Send to all users in the room
+        io.to(roomId).emit("get-recording-response", {
           success: true,
-          ...recordingData,
-          message: `Recording data for user ${targetUserId}`,
+          audioData: base64Audio,
+          recordingSize: combinedBuffer.length,
+          mimeType: "audio/webm",
+          totalChunks: room.recordingChunks.length,
         })
-        console.log(`📤 Sent recording data for user ${targetUserId} (${recordingData.size} bytes)`)
+        console.log(`📤 Sent current recording for room ${roomId} (${combinedBuffer.length} bytes)`)
       } else {
-        socket.emit("get-recording-response", {
+        // Send to all users in the room
+        io.to(roomId).emit("get-recording-response", {
           success: true,
           audioData: null,
-          size: 0,
-          chunks: 0,
-          userId: targetUserId,
+          recordingSize: 0,
           mimeType: "audio/webm",
-          message: `No recording data for user ${targetUserId}`,
+          totalChunks: 0,
         })
+        console.log(`⚠️ No recording data available for room ${roomId}`)
       }
     } else {
-      socket.emit("get-recording-response", { success: false, error: "Room not found" })
-    }
-  })
-
-  // New endpoint: Get recording status
-  socket.on("get-recording-status", (data) => {
-    const { roomId } = data
-
-    if (rooms.has(roomId)) {
-      const room = rooms.get(roomId)
-      const status = room.getRecordingStatus()
-
-      socket.emit("recording-status-response", {
-        success: true,
-        roomId,
-        ...status,
-      })
-    } else {
-      socket.emit("recording-status-response", {
-        success: false,
-        error: "Room not found",
-      })
+      io.to(roomId).emit("get-recording-response", { success: false, error: "Room not found" })
     }
   })
 
@@ -768,12 +474,25 @@ io.on("connection", (socket) => {
     const fromUserId = userSockets.get(socket.id)?.userId
     console.log(`🤝 WebRTC offer from ${fromUserId} to ${targetUserId} in room ${roomId}`)
 
-    // Broadcast to specific user in room
-    socket.to(roomId).emit("webrtc-offer", {
-      fromUserId,
-      targetUserId,
-      offer,
-    })
+    // Find target user's socket
+    const targetUser = Array.from(rooms.get(roomId)?.users.values() || []).find(
+      (user) => user.userId === targetUserId
+    )
+
+    if (targetUser) {
+      // Send to specific target user
+      io.to(targetUser.socketId).emit("webrtc-offer", {
+        fromUserId,
+        targetUserId,
+        offer,
+      })
+    } else {
+      console.log(`⚠️ Target user ${targetUserId} not found in room ${roomId}`)
+      socket.emit("webrtc-error", {
+        error: "Target user not found",
+        targetUserId,
+      })
+    }
   })
 
   socket.on("webrtc-answer", (data) => {
@@ -781,23 +500,108 @@ io.on("connection", (socket) => {
     const fromUserId = userSockets.get(socket.id)?.userId
     console.log(`🤝 WebRTC answer from ${fromUserId} to ${targetUserId} in room ${roomId}`)
 
-    socket.to(roomId).emit("webrtc-answer", {
-      fromUserId,
-      targetUserId,
-      answer,
-    })
+    // Find target user's socket
+    const targetUser = Array.from(rooms.get(roomId)?.users.values() || []).find(
+      (user) => user.userId === targetUserId
+    )
+
+    if (targetUser) {
+      // Send to specific target user
+      io.to(targetUser.socketId).emit("webrtc-answer", {
+        fromUserId,
+        targetUserId,
+        answer,
+      })
+    } else {
+      console.log(`⚠️ Target user ${targetUserId} not found in room ${roomId}`)
+      socket.emit("webrtc-error", {
+        error: "Target user not found",
+        targetUserId,
+      })
+    }
   })
 
   socket.on("webrtc-ice-candidate", (data) => {
     const { roomId, targetUserId, candidate } = data
     const fromUserId = userSockets.get(socket.id)?.userId
-    console.log(`🧊 ICE candidate from ${fromUserId} to ${targetUserId} in room ${roomId}`)
 
-    socket.to(roomId).emit("webrtc-ice-candidate", {
-      fromUserId,
-      targetUserId,
-      candidate,
-    })
+    // Validate candidate data
+    if (!candidate || !candidate.candidate) {
+      console.log(`⚠️ Invalid ICE candidate from ${fromUserId} to ${targetUserId}`)
+      return
+    }
+
+    // Find target user's socket
+    const targetUser = Array.from(rooms.get(roomId)?.users.values() || []).find(
+      (user) => user.userId === targetUserId
+    )
+
+    if (targetUser) {
+      // Add timestamp to track candidate freshness
+      const candidateWithTimestamp = {
+        ...candidate,
+        timestamp: Date.now()
+      }
+
+      // Send to specific target user
+      io.to(targetUser.socketId).emit("webrtc-ice-candidate", {
+        fromUserId,
+        targetUserId,
+        candidate: candidateWithTimestamp
+      })
+
+      // Log only unique candidates
+      console.log(`🧊 ICE candidate from ${fromUserId} to ${targetUserId} in room ${roomId} (type: ${candidate.candidate.split(' ')[0]})`)
+    } else {
+      console.log(`⚠️ Target user ${targetUserId} not found in room ${roomId}`)
+      socket.emit("webrtc-error", {
+        error: "Target user not found",
+        targetUserId,
+      })
+    }
+  })
+
+  // Add new event for WebRTC connection state
+  socket.on("webrtc-connection-state", (data) => {
+    const { roomId, targetUserId, state } = data
+    const fromUserId = userSockets.get(socket.id)?.userId
+    console.log(`🔄 WebRTC connection state from ${fromUserId} to ${targetUserId}: ${state}`)
+
+    // Find target user's socket
+    const targetUser = Array.from(rooms.get(roomId)?.users.values() || []).find(
+      (user) => user.userId === targetUserId
+    )
+
+    if (targetUser) {
+      // Send to specific target user
+      io.to(targetUser.socketId).emit("webrtc-connection-state", {
+        fromUserId,
+        targetUserId,
+        state,
+        timestamp: Date.now()
+      })
+    }
+  })
+
+  // Add new event for WebRTC connection cleanup
+  socket.on("webrtc-cleanup", (data) => {
+    const { roomId, targetUserId } = data
+    const fromUserId = userSockets.get(socket.id)?.userId
+    console.log(`🧹 WebRTC cleanup from ${fromUserId} to ${targetUserId} in room ${roomId}`)
+
+    // Find target user's socket
+    const targetUser = Array.from(rooms.get(roomId)?.users.values() || []).find(
+      (user) => user.userId === targetUserId
+    )
+
+    if (targetUser) {
+      // Send to specific target user
+      io.to(targetUser.socketId).emit("webrtc-cleanup", {
+        fromUserId,
+        targetUserId,
+        timestamp: Date.now()
+      })
+    }
   })
 
   // Handle disconnect - IMPROVED VERSION
@@ -814,11 +618,18 @@ io.on("connection", (socket) => {
         const removed = room.removeUser(userId)
 
         if (removed) {
-          // Notify other users
+          // Notify other users about the disconnect
           socket.to(roomId).emit("user-left", {
             userId,
             reason: "disconnect",
             timestamp: Date.now(),
+          })
+
+          // Notify all users in the room about the WebRTC connection cleanup
+          io.to(roomId).emit("webrtc-connection-state", {
+            fromUserId: userId,
+            state: "closed",
+            reason: "user_disconnected"
           })
 
           // Broadcast updated room info
@@ -839,6 +650,12 @@ io.on("connection", (socket) => {
             }
           }
           rooms.delete(roomId)
+          // Delete room folder
+          const roomFolder = getRoomFolder(roomId)
+          if (fs.existsSync(roomFolder)) {
+            fs.rmSync(roomFolder, { recursive: true, force: true })
+            console.log(`🗑️ Room folder deleted: ${roomFolder}`)
+          }
           console.log(`🗑️ Room ${roomId} deleted (empty after disconnect)`)
         }
       }
@@ -884,11 +701,12 @@ function stopRoomRecording(roomId) {
       const sortedChunks = room.recordingChunks.sort((a, b) => (a.index || 0) - (b.index || 0))
       const combinedBuffer = Buffer.concat(sortedChunks.map((chunk) => chunk.data))
 
-      // Save to file if not already saved via stream
+      // Save to file in room folder
+      const roomFolder = getRoomFolder(roomId)
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
+      room.recordingFilePath = path.join(roomFolder, `room-${roomId}-${timestamp}.webm`)
       try {
-        if (!fs.existsSync(room.recordingFilePath) || fs.statSync(room.recordingFilePath).size === 0) {
-          fs.writeFileSync(room.recordingFilePath, combinedBuffer)
-        }
+        fs.writeFileSync(room.recordingFilePath, combinedBuffer)
         console.log(`💾 Recording saved: ${room.recordingFilePath} (${combinedBuffer.length} bytes)`)
       } catch (error) {
         console.error(`❌ Error saving recording file: ${error}`)
@@ -898,11 +716,14 @@ function stopRoomRecording(roomId) {
       const base64Audio = combinedBuffer.toString("base64")
       const filename = path.basename(room.recordingFilePath)
 
+      // Clear chunks after combining and saving
+      room.recordingChunks = [];
+
       return {
         base64: base64Audio,
         size: combinedBuffer.length,
         filename: filename,
-        filePath: room.recordingFilePath,
+        filePath: room.recordingFilePath, // Return the webm path
       }
     } else {
       console.log(`⚠️ No audio chunks to save for room ${roomId}`)
@@ -931,123 +752,30 @@ app.get("/api/rooms", (req, res) => {
   res.json({ rooms: roomList })
 })
 
-// Get recordings by session
-app.get("/api/recordings/session/:sessionId", (req, res) => {
-  const sessionId = req.params.sessionId
-
-  try {
-    const summaryPath = path.join(recordingsDir, `${sessionId}-summary.json`)
-
-    if (fs.existsSync(summaryPath)) {
-      const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"))
-
-      // Check if all user recording files exist
-      const userRecordings = summary.userRecordings.map((recording) => {
-        const exists = fs.existsSync(recording.filePath)
-        return {
-          ...recording,
-          exists,
-          downloadUrl: exists ? `/api/recordings/${recording.filename}` : null,
-        }
-      })
-
-      res.json({
-        session: summary,
-        userRecordings,
-        totalFiles: userRecordings.filter((r) => r.exists).length,
-      })
-    } else {
-      res.status(404).json({ error: "Session not found" })
-    }
-  } catch (error) {
-    console.error("❌ Error getting session recordings:", error)
-    res.status(500).json({ error: "Failed to get session recordings" })
-  }
-})
-
-// Get all recording sessions
-app.get("/api/recordings/sessions", (req, res) => {
-  try {
-    const files = fs.readdirSync(recordingsDir)
-    const summaryFiles = files.filter((file) => file.endsWith("-summary.json"))
-
-    const sessions = summaryFiles
-      .map((file) => {
-        try {
-          const filePath = path.join(recordingsDir, file)
-          const summary = JSON.parse(fs.readFileSync(filePath, "utf8"))
-          const stats = fs.statSync(filePath)
-
-          return {
-            sessionId: summary.sessionId,
-            roomId: summary.roomId,
-            startTime: summary.startTime,
-            endTime: summary.endTime,
-            duration: summary.duration,
-            totalFiles: summary.totalFiles,
-            totalSize: summary.totalSize,
-            userCount: summary.userRecordings.length,
-            created: stats.birthtime,
-            summaryFile: file,
-          }
-        } catch (error) {
-          console.error(`Error reading summary file ${file}:`, error)
-          return null
-        }
-      })
-      .filter((session) => session !== null)
-      .sort((a, b) => new Date(b.startTime) - new Date(a.startTime))
-
-    res.json({ sessions })
-  } catch (error) {
-    console.error("❌ Error listing recording sessions:", error)
-    res.status(500).json({ error: "Failed to list recording sessions" })
-  }
-})
-
-// Download all recordings from a session as ZIP
-app.get("/api/recordings/session/:sessionId/download", (req, res) => {
-  const sessionId = req.params.sessionId
-
-  try {
-    const summaryPath = path.join(recordingsDir, `${sessionId}-summary.json`)
-
-    if (!fs.existsSync(summaryPath)) {
-      return res.status(404).json({ error: "Session not found" })
-    }
-
-    const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8"))
-
-    // For now, just return the summary. In a full implementation,
-    // you'd want to create a ZIP file with all recordings
-    res.json({
-      message: "ZIP download would be implemented here",
-      session: summary,
-      files: summary.userRecordings.map((r) => r.filename),
-    })
-  } catch (error) {
-    console.error("❌ Error creating session download:", error)
-    res.status(500).json({ error: "Failed to create session download" })
-  }
-})
-
 app.get("/api/recordings", (req, res) => {
   try {
-    const files = fs
-      .readdirSync(recordingsDir)
-      .filter((file) => file.endsWith(".webm"))
-      .map((file) => {
-        const filePath = path.join(recordingsDir, file)
-        const stats = fs.statSync(filePath)
-        return {
-          filename: file,
-          size: stats.size,
-          created: stats.birthtime,
-          modified: stats.mtime,
-        }
-      })
-      .sort((a, b) => b.created - a.created)
-
+    let files = []
+    if (fs.existsSync(recordingsDir)) {
+      const roomFolders = fs.readdirSync(recordingsDir).filter(f => fs.statSync(path.join(recordingsDir, f)).isDirectory())
+      for (const folder of roomFolders) {
+        const folderPath = path.join(recordingsDir, folder)
+        const recs = fs.readdirSync(folderPath)
+          .filter((file) => file.endsWith(".webm") || file.endsWith(".mp4"))
+          .map((file) => {
+            const filePath = path.join(folderPath, file)
+            const stats = fs.statSync(filePath)
+            return {
+              filename: file,
+              size: stats.size,
+              created: stats.birthtime,
+              modified: stats.mtime,
+              room: folder
+            }
+          })
+        files = files.concat(recs)
+      }
+    }
+    files = files.sort((a, b) => b.created - a.created)
     res.json({ recordings: files })
   } catch (error) {
     console.error("❌ Error listing recordings:", error)
@@ -1055,12 +783,44 @@ app.get("/api/recordings", (req, res) => {
   }
 })
 
-app.get("/api/recordings/:filename", (req, res) => {
+app.get("/api/recordings/:filename", async (req, res) => {
   const filename = req.params.filename
-  const filePath = path.join(recordingsDir, filename)
+  const format = req.query.format || 'webm' // Default to webm if no format specified
+  let filePath = null
+  let mp4FilePath = null
 
-  if (fs.existsSync(filePath)) {
-    res.download(filePath)
+  if (fs.existsSync(recordingsDir)) {
+    const roomFolders = fs.readdirSync(recordingsDir).filter(f => fs.statSync(path.join(recordingsDir, f)).isDirectory())
+    for (const folder of roomFolders) {
+      const candidate = path.join(recordingsDir, folder, filename)
+      if (fs.existsSync(candidate)) {
+        filePath = candidate
+        break
+      }
+    }
+  }
+
+  if (filePath) {
+    if (format === 'mp4') {
+      // Convert to MP4 if requested
+      mp4FilePath = filePath.replace(/\.webm$/, '.mp4')
+
+      // Check if MP4 already exists
+      if (!fs.existsSync(mp4FilePath)) {
+        try {
+          const { execSync } = require('child_process')
+          execSync(`ffmpeg -y -i "${filePath}" -c:a aac -b:a 192k "${mp4FilePath}"`)
+          console.log(`🎬 Converted recording to MP4: ${mp4FilePath}`)
+        } catch (err) {
+          console.error('❌ Error converting to MP4:', err)
+          return res.status(500).json({ error: "Failed to convert recording to MP4" })
+        }
+      }
+      res.download(mp4FilePath)
+    } else {
+      // Send original webm file
+      res.download(filePath)
+    }
   } else {
     res.status(404).json({ error: "Recording not found" })
   }
@@ -1112,27 +872,6 @@ app.get("/test", (req, res) => {
   })
 })
 
-// Get network interfaces for mobile connection info
-function getNetworkInterfaces() {
-  const os = require("os")
-  const networkInt = os.networkInterfaces()
-  const addresses = []
-
-  for (const name of Object.keys(networkInt)) {
-    for (const interface of networkInt[name]) {
-      if (interface.family === "IPv4" && !interface.internal) {
-        addresses.push({
-          name,
-          address: interface.address,
-          url: `${useHTTPS ? "https" : "http"}://${interface.address}:${PORT}`,
-        })
-      }
-    }
-  }
-
-  return addresses
-}
-
 const PORT = process.env.PORT || 3001
 
 server.listen(PORT, "0.0.0.0", () => {
@@ -1144,13 +883,8 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`📊 API endpoints available at: ${protocol}://localhost:${PORT}/api/rooms`)
 
   if (useHTTPS) {
-    console.log(`🔒 HTTPS enabled with enhanced self-signed certificate`)
-    console.log(`📱 Mobile devices can connect using these URLs:`)
-
-    const networkInterfaces = getNetworkInterfaces()
-    networkInterfaces.forEach((iface) => {
-      console.log(`   📱 ${iface.name}: ${iface.url}`)
-    })
+    console.log(`🔒 HTTPS enabled with self-signed certificate`)
+    console.log(`📱 Mobile devices can connect (may need to accept certificate)`)
   } else {
     console.log(`🔓 HTTP mode - for HTTPS, set USE_HTTPS=true`)
   }
