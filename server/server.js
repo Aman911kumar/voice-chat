@@ -711,6 +711,14 @@ io.on("connection", (socket) => {
       socket.emit("room-info-response", { error: "Room not found" })
     }
   })
+
+  // Add this inside io.on('connection', (socket) => { ... })
+  socket.on("mic-level", (data) => {
+    const { roomId, userId, level } = data;
+    if (!roomId || !userId || typeof level !== "number") return;
+    // Broadcast to all other users in the room
+    socket.to(roomId).emit("peer-mic-level", { userId, level });
+  });
 })
 
 // Helper function to stop room recording
