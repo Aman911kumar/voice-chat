@@ -13,7 +13,7 @@ import {
   Circle,
   Play,
   Pause,
-  AlertCircle,
+  AlertTriangle,
   Smartphone,
   Volume2,
   VolumeX,
@@ -144,15 +144,24 @@ export default function VoiceRoom() {
     console.log("🔌 Connecting to server:", serverUrl, "Mobile:", isMobile)
 
     socketRef.current = io(serverUrl, {
-      transports: ["polling", "websocket"],
-      timeout: 30000,
+      transports: ["polling", "websocket"], // Try polling first, then upgrade to websocket
+      timeout: 60000,
       forceNew: true,
       autoConnect: true,
       reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 2000,
-      reconnectionDelayMax: 10000,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
       randomizationFactor: 0.5,
+      upgrade: true,
+      rememberUpgrade: true,
+      path: "/socket.io/",
+      withCredentials: true,
+      query: {
+        userId,
+        roomId,
+        isMobile: isMobile.toString()
+      }
     })
 
     const socket = socketRef.current
@@ -164,8 +173,20 @@ export default function VoiceRoom() {
       setConnectionStatus("Connected")
       setConnectionError(null)
 
-      // Join the room
-      socket.emit("join-room", { roomId, userId })
+      // Join the room with retry
+      const joinRoom = () => {
+        console.log("🚪 Attempting to join room:", roomId)
+        socket.emit("join-room", { roomId, userId }, (response: any) => {
+          if (response && response.error) {
+            console.error("❌ Failed to join room:", response.error)
+            setConnectionError(`Failed to join room: ${response.error}`)
+            // Retry after 2 seconds
+            setTimeout(joinRoom, 2000)
+          }
+        })
+      }
+
+      joinRoom()
     })
 
     socket.on("disconnect", (reason) => {
@@ -176,12 +197,38 @@ export default function VoiceRoom() {
 
       // Reset all peer connections
       setPeerStates(new Map())
+
+      // If the disconnect was not initiated by the client, try to reconnect
+      if (reason !== "io client disconnect") {
+        setTimeout(() => {
+          if (socketRef.current) {
+            console.log("🔄 Attempting to reconnect...")
+            socketRef.current.connect()
+          }
+        }, 2000)
+      }
     })
 
     socket.on("connect_error", (error) => {
       console.error("❌ Connection error:", error)
       setConnectionStatus("Connection Error")
       setConnectionError(error.message || "Failed to connect to server")
+
+      // Try to reconnect with a different transport
+      if (socketRef.current) {
+        const currentTransport = socketRef.current.io.engine.transport.name
+        console.log("🔄 Current transport:", currentTransport)
+
+        if (currentTransport === "polling") {
+          console.log("🔄 Switching to WebSocket transport...")
+          socketRef.current.io.opts.transports = ["websocket"]
+        } else {
+          console.log("🔄 Switching to polling transport...")
+          socketRef.current.io.opts.transports = ["polling"]
+        }
+
+        socketRef.current.connect()
+      }
     })
 
     socket.on("reconnect", (attemptNumber) => {
@@ -189,11 +236,19 @@ export default function VoiceRoom() {
       setIsConnected(true)
       setConnectionStatus("Reconnected")
       setConnectionError(null)
+
+      // Rejoin the room after reconnection
+      socket.emit("join-room", { roomId, userId })
     })
 
     socket.on("reconnect_error", (error) => {
       console.error("❌ Reconnection error:", error)
       setConnectionError("Reconnection failed")
+    })
+
+    socket.on("reconnect_failed", () => {
+      console.error("❌ Reconnection failed after all attempts")
+      setConnectionError("Failed to reconnect after multiple attempts")
     })
 
     // Room events
@@ -527,7 +582,7 @@ export default function VoiceRoom() {
       setTimeout(() => {
         if (stream) {
           startMicrophoneMonitoring(stream);
-        }
+    }
       }, 1000);
     }
   }, []);
@@ -770,12 +825,12 @@ export default function VoiceRoom() {
         const now = Date.now()
         if (now - lastIceCandidateTime > ICE_CANDIDATE_THROTTLE) {
           lastIceCandidateTime = now
-          console.log("🧊 Sending ICE candidate to:", targetUserId)
-          socketRef.current.emit("webrtc-ice-candidate", {
-            roomId,
-            targetUserId,
-            candidate: event.candidate,
-          })
+        console.log("🧊 Sending ICE candidate to:", targetUserId)
+        socketRef.current.emit("webrtc-ice-candidate", {
+          roomId,
+          targetUserId,
+          candidate: event.candidate,
+        })
         }
       }
     }
@@ -818,7 +873,7 @@ export default function VoiceRoom() {
 
       // Set audio constraints for better quality
       if (audio.srcObject !== remoteStream) {
-        audio.srcObject = remoteStream
+      audio.srcObject = remoteStream
 
         // Ensure audio is playing
         const playAudio = async () => {
@@ -826,7 +881,7 @@ export default function VoiceRoom() {
             await audio.play()
             console.log("✅ Remote audio playing for:", targetUserId)
           } catch (error) {
-            console.error("❌ Error playing remote audio:", error)
+        console.error("❌ Error playing remote audio:", error)
             // Try to recover by restarting the stream
             setTimeout(() => {
               audio.play().catch(console.error)
@@ -1007,9 +1062,9 @@ export default function VoiceRoom() {
   const handleWebRTCAnswer = async (fromUserId: string, answer: RTCSessionDescriptionInit) => {
     try {
       console.log("🤝 Received WebRTC answer from:", fromUserId)
-      const pc = peerConnections.current.get(fromUserId)
+    const pc = peerConnections.current.get(fromUserId)
 
-      if (pc) {
+    if (pc) {
         if (pc.signalingState !== "stable") {
           // Modify the answer to ensure audio is properly configured
           if (answer.sdp) {
@@ -1025,9 +1080,9 @@ export default function VoiceRoom() {
         console.error("❌ No peer connection found for:", fromUserId)
         updatePeerState(fromUserId, "failed")
       }
-    } catch (error) {
-      console.error("❌ Error handling WebRTC answer:", error)
-      updatePeerState(fromUserId, "failed")
+      } catch (error) {
+        console.error("❌ Error handling WebRTC answer:", error)
+        updatePeerState(fromUserId, "failed")
     }
   }
 
@@ -1242,7 +1297,7 @@ export default function VoiceRoom() {
       // Send offer
       if (socketRef.current) {
         socketRef.current.emit("webrtc-offer", {
-          roomId,
+                roomId,
           targetUserId,
           offer,
         })
@@ -1358,7 +1413,7 @@ export default function VoiceRoom() {
         try {
           await audioContext.current.resume()
           console.log("✅ Audio context resumed")
-        } catch (error) {
+    } catch (error) {
           console.error("❌ Error resuming audio context:", error)
         }
       }
@@ -1387,7 +1442,7 @@ export default function VoiceRoom() {
         }
         existingUsers.slice(1).forEach((user, index) => {
           setTimeout(() => {
-            if (localStream) {
+    if (localStream) {
               initiateWebRTCConnection(user.userId)
             }
           }, (index + 1) * 1000)
@@ -1470,7 +1525,7 @@ export default function VoiceRoom() {
         reader.readAsArrayBuffer(event.data);
       }
     };
-    mediaRecorder.current.start(1000); // 1s chunks
+    mediaRecorder.current.start(500); // 0.5s chunks for smoother audio
   };
 
   // Update the recording-started event handler
@@ -1530,9 +1585,9 @@ export default function VoiceRoom() {
   const playLastRecording = () => {
     if (!audioRef.current || !lastRecordingUrl) return;
 
-    if (isPlaying) {
+      if (isPlaying) {
       audioRef.current.pause();
-    } else {
+      } else {
       audioRef.current.play().catch(error => {
         console.error("Error playing audio:", error);
         setIsPlaying(false);
@@ -1569,25 +1624,6 @@ export default function VoiceRoom() {
         return <WifiOff className="w-3 h-3 text-red-500" />
       default:
         return <VolumeX className="w-3 h-3 text-gray-400" />
-    }
-  }
-
-  // Download latest MP4 recording for this room
-  const downloadLatestMp4 = async () => {
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001"}/api/recordings`)
-      const data = await res.json()
-      // Find the latest recording for this room
-      const recording = data.recordings.find(
-        (rec: any) => rec.filename.startsWith(`room-${roomId}`)
-      )
-      if (recording) {
-        window.open(`${process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001"}/api/recordings/${recording.filename}?format=mp4`)
-      } else {
-        alert("No recording found yet. Try again in a few seconds.")
-      }
-    } catch (err) {
-      alert("Failed to fetch recordings list.")
     }
   }
 
@@ -1710,7 +1746,7 @@ export default function VoiceRoom() {
   const renderPlayButton = () => {
     if (!lastRecordingUrl) {
       if (isRequestingRecording) {
-        return (
+  return (
           <Button
             variant="outline"
             disabled
@@ -1749,10 +1785,33 @@ export default function VoiceRoom() {
     };
   }, []);
 
+  // Add state for latest mixed filename
+  const [latestMixedFilename, setLatestMixedFilename] = useState<string | null>(null);
+
+  // Update recording-stop-response to store the filename
+  useEffect(() => {
+    if (!socketRef.current) return;
+    const socket = socketRef.current;
+    const handler = (data: any) => {
+      if (data.success && data.filename) {
+        setLatestMixedFilename(data.filename);
+      }
+    };
+    socket.on("recording-stop-response", handler);
+    return () => { socket.off("recording-stop-response", handler); };
+  }, []);
+
+  // Add download handlers for webm and mp3
+  const downloadMixedRecording = (format: 'webm' | 'mp3') => {
+    if (!latestMixedFilename) return;
+    const url = `${process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:3001"}/api/recordings/${latestMixedFilename}?format=${format}`;
+    window.open(url, '_blank');
+  };
+
   return (
     <div className="min-h-screen bg-gray-100 p-4 transition-all duration-400 ease-in-out">
       <div className="max-w-4xl mx-auto transition-all duration-400 ease-in-out">
-        <Card className="mb-6 transition-all duration-400 ease-in-out hover:shadow-xl hover:scale-[1.01]">
+        <Card className="mb-6 transition-all duration-400 ease-in-out">
           <CardHeader>
             <CardTitle className="flex items-center justify-between transition-all duration-400 ease-in-out">
               <span className="flex items-center gap-2 transition-all duration-400 ease-in-out">
@@ -1775,7 +1834,7 @@ export default function VoiceRoom() {
           <CardContent>
             {connectionError && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 transition-all duration-400 ease-in-out hover:bg-red-100">
-                <AlertCircle className="w-4 h-4 text-red-500 transition-all duration-400 ease-in-out" />
+                <AlertTriangle className="w-4 h-4 text-red-500 transition-all duration-400 ease-in-out" />
                 <span className="text-red-700 text-sm transition-all duration-400 ease-in-out">{connectionError}</span>
                 {isMobile && (
                   <span className="text-red-600 text-xs ml-2 transition-all duration-400 ease-in-out">
@@ -1823,7 +1882,7 @@ export default function VoiceRoom() {
                       ) : (
                         <>
                           <Circle className="w-4 h-4 transition-all duration-400 ease-in-out" />
-                          Start Recording
+                      Start Recording
                         </>
                       )}
                     </Button>
@@ -1854,21 +1913,30 @@ export default function VoiceRoom() {
 
               {renderPlayButton()}
 
-              <Button
-                onClick={downloadLatestMp4}
-                variant="outline"
-                className="flex items-center gap-2 transition-all duration-400 ease-in-out transform hover:scale-105 hover:shadow-md active:scale-95 active:bg-[#9fd5e3] text-black"
-              >
-                Download MP4
-              </Button>
-
-              <Button
-                onClick={leaveRoom}
-                variant="outline"
-                className="transition-all duration-400 ease-in-out transform hover:scale-105 hover:shadow-md active:scale-95"
-              >
+              <div className="flex gap-4 flex-wrap items-center mb-4">
+                {/* Mute button */}
+                {/* Start Recording button */}
+                {/* Play button */}
+                <Button
+                  onClick={() => downloadMixedRecording('mp3')}
+                  variant="outline"
+                  className="flex items-center gap-2 transition-all duration-300 ease-in-out transform hover:scale-105 hover:shadow-lg active:scale-95 active:bg-green-100 focus:ring-2 focus:ring-green-400"
+                  style={{ minWidth: 180 }}
+                  disabled={!latestMixedFilename}
+                >
+                  <span role="img" aria-label="mp3">🎶</span> Download MP3
+                </Button>
+                {/* Leave Room button */}
+                <Button
+                  onClick={leaveRoom}
+                  variant="destructive"
+                  className="flex items-center gap-2 transition-all duration-300 ease-in-out transform hover:scale-105 hover:shadow-lg active:scale-95"
+                  style={{ minWidth: 140 }}
+                >
+                  <Square className="w-4 h-4" />
                 Leave Room
               </Button>
+              </div>
             </div>
 
             <div className="flex items-center gap-4 mb-4 text-sm flex-wrap transition-all duration-400 ease-in-out">
