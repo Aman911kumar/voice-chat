@@ -33,13 +33,13 @@ if (useHTTPS) {
 // Enhanced Socket.io configuration for mobile support
 const io = socketIo(server, {
   cors: {
-    origin: "*",
+    origin: "http://localhost:3000", // Frontend URL
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true,
     allowedHeaders: ["*"],
   },
   allowEIO3: true,
-  transports: ["polling", "websocket"], // Try polling first, then upgrade to websocket
+  transports: ["polling", "websocket"],
   maxHttpBufferSize: 1e8,
   pingTimeout: 60000,
   pingInterval: 25000,
@@ -59,7 +59,7 @@ const io = socketIo(server, {
 // Enhanced middleware for mobile support
 app.use(
   cors({
-    origin: "*",
+    origin: "http://localhost:3000", // Frontend URL
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["*"],
@@ -68,7 +68,7 @@ app.use(
 
 // Handle preflight requests
 app.options("*", (req, res) => {
-  res.header("Access-Control-Allow-Origin", "*")
+  res.header("Access-Control-Allow-Origin", "http://localhost:3000")
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
   res.header("Access-Control-Allow-Headers", "*")
   res.header("Access-Control-Allow-Credentials", "true")
