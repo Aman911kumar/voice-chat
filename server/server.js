@@ -24,10 +24,10 @@ if (useHTTPS) {
   }
 
   server = https.createServer(httpsOptions, app)
-  // console.log("🔒 HTTPS server enabled")
+  console.log("🔒 HTTPS server enabled")
 } else {
   server = http.createServer(app)
-  // console.log("🔓 HTTP server enabled")
+  console.log("🔓 HTTP server enabled")
 }
 
 // Enhanced Socket.io configuration for mobile support
@@ -122,7 +122,7 @@ class Room {
   addUser(userId, socketId) {
     this.users.set(userId, { userId, socketId, joinedAt: Date.now() })
     this.lastActivity = Date.now()
-    // console.log(`👥 Room ${this.id}: Added user ${userId}. Total users: ${this.users.size}`)
+    console.log(`👥 Room ${this.id}: Added user ${userId}. Total users: ${this.users.size}`)
   }
 
   removeUser(userId) {
@@ -130,7 +130,7 @@ class Room {
     this.activeUsers.delete(userId)
     this.lastActivity = Date.now()
     if (removed) {
-      // console.log(`👥 Room ${this.id}: Removed user ${userId}. Total users: ${this.users.size}`)
+      console.log(`👥 Room ${this.id}: Removed user ${userId}. Total users: ${this.users.size}`)
     }
     return removed
   }
@@ -175,22 +175,22 @@ class Room {
 
 // Socket.io connection handling
 io.on("connection", (socket) => {
-  // console.log(`✅ User connected: ${socket.id} from ${socket.handshake.address}`)
+  console.log(`✅ User connected: ${socket.id} from ${socket.handshake.address}`)
 
   // Enhanced connection handling
   socket.on("connect_error", (error) => {
-    // console.error("❌ Socket connection error:", error)
+    console.error("❌ Socket connection error:", error)
   })
 
   // Join room - FIXED VERSION
   socket.on("join-room", (data, callback) => {
     const { roomId, userId } = data
-    // console.log(`🚪 User ${userId} attempting to join room ${roomId}`)
+    console.log(`🚪 User ${userId} attempting to join room ${roomId}`)
 
     // Validate input
     if (!roomId || !userId) {
       const error = "Missing roomId or userId"
-      // console.error(`❌ ${error}`)
+      console.error(`❌ ${error}`)
       if (callback) callback({ error })
       return
     }
@@ -199,7 +199,7 @@ io.on("connection", (socket) => {
       // Check if user is already in a room
       const existingUserInfo = userSockets.get(socket.id)
       if (existingUserInfo) {
-        // console.log(`⚠️ User ${userId} already in room ${existingUserInfo.roomId}, leaving first`)
+        console.log(`⚠️ User ${userId} already in room ${existingUserInfo.roomId}, leaving first`)
         // Leave existing room first
         socket.leave(existingUserInfo.roomId)
         if (rooms.has(existingUserInfo.roomId)) {
@@ -210,7 +210,7 @@ io.on("connection", (socket) => {
       // Create room if it doesn't exist
       if (!rooms.has(roomId)) {
         rooms.set(roomId, new Room(roomId))
-        // console.log(`🆕 Created new room: ${roomId}`)
+        console.log(`🆕 Created new room: ${roomId}`)
       }
 
       const room = rooms.get(roomId)
@@ -225,7 +225,7 @@ io.on("connection", (socket) => {
       // Get other users in the room (excluding the joining user)
       const otherUsers = room.getUsers().filter((user) => user.userId !== userId)
 
-      // console.log(`📢 Notifying ${otherUsers.length} existing users about new user ${userId}`)
+      console.log(`📢 Notifying ${otherUsers.length} existing users about new user ${userId}`)
 
       // Notify OTHER users in the room about the new user
       socket.to(roomId).emit("user-joined", {
@@ -247,7 +247,7 @@ io.on("connection", (socket) => {
 
       // If room is currently recording, notify the new user
       if (room.isRecording) {
-        // console.log(`️ Room ${roomId} is recording, notifying new user ${userId}`)
+        console.log(`🎙️ Room ${roomId} is recording, notifying new user ${userId}`)
         socket.emit("recording-started", {
           roomId,
           timestamp: room.recordingStartTime,
@@ -255,11 +255,11 @@ io.on("connection", (socket) => {
         })
       }
 
-      // console.log(`✅ User ${userId} joined room ${roomId}. Total users: ${room.getUserCount()}`)
-      // console.log(
-      //   `📋 Room ${roomId} users:`,
-      //   room.getUsers().map((u) => u.userId),
-      // )
+      console.log(`✅ User ${userId} joined room ${roomId}. Total users: ${room.getUserCount()}`)
+      console.log(
+        `📋 Room ${roomId} users:`,
+        room.getUsers().map((u) => u.userId),
+      )
 
       // Broadcast updated room info to all users
       io.to(roomId).emit("room-updated", {
@@ -272,7 +272,7 @@ io.on("connection", (socket) => {
       // Send success callback
       if (callback) callback({ success: true })
     } catch (error) {
-      // console.error(`❌ Error joining room: ${error}`)
+      console.error(`❌ Error joining room: ${error}`)
       if (callback) callback({ error: "Failed to join room" })
     }
   })
@@ -280,7 +280,7 @@ io.on("connection", (socket) => {
   // Leave room - IMPROVED VERSION
   socket.on("leave-room", (data) => {
     const { roomId, userId } = data
-    // console.log(`🚪 User ${userId} leaving room ${roomId}`)
+    console.log(`🚪 User ${userId} leaving room ${roomId}`)
 
     if (rooms.has(roomId)) {
       const room = rooms.get(roomId)
@@ -305,10 +305,10 @@ io.on("connection", (socket) => {
       // Clean up empty rooms
       if (room.getUserCount() === 0) {
         if (room.isRecording) {
-          // console.log(`⏹️ Stopping recording for empty room ${roomId}`)
+          console.log(`⏹️ Stopping recording for empty room ${roomId}`)
           const recordingData = stopRoomRecording(roomId)
           if (recordingData.size > 0) {
-            // console.log(`💾 Final recording saved: ${recordingData.filename} (${recordingData.size} bytes)`)
+            console.log(`💾 Final recording saved: ${recordingData.filename} (${recordingData.size} bytes)`)
           }
         }
         rooms.delete(roomId)
@@ -316,9 +316,9 @@ io.on("connection", (socket) => {
         const roomFolder = getRoomFolder(roomId)
         if (fs.existsSync(roomFolder)) {
           fs.rmSync(roomFolder, { recursive: true, force: true })
-          // console.log(`🗑️ Room folder deleted: ${roomFolder}`)
+          console.log(`🗑️ Room folder deleted: ${roomFolder}`)
         }
-        // console.log(`🗑️ Room ${roomId} deleted (empty)`)
+        console.log(`🗑️ Room ${roomId} deleted (empty)`)
       }
     }
 
@@ -329,7 +329,7 @@ io.on("connection", (socket) => {
   // Start recording
   socket.on("start-recording", (data) => {
     const { roomId } = data
-    // console.log(`🎙️ Start recording request for room ${roomId}`)
+    console.log(`🎙️ Start recording request for room ${roomId}`)
 
     if (rooms.has(roomId)) {
       const room = rooms.get(roomId)
@@ -349,9 +349,9 @@ io.on("connection", (socket) => {
         // Create write stream for real-time saving
         try {
           room.recordingStream = fs.createWriteStream(room.recordingFilePath)
-          // console.log(`📁 Recording stream created: ${room.recordingFilePath}`)
+          console.log(`📁 Recording stream created: ${room.recordingFilePath}`)
         } catch (error) {
-          // console.error(`❌ Error creating recording stream: ${error}`)
+          console.error(`❌ Error creating recording stream: ${error}`)
         }
 
         // Notify all users in the room
@@ -362,7 +362,7 @@ io.on("connection", (socket) => {
         })
 
         socket.emit("recording-start-response", { success: true })
-        // console.log(`✅ Recording started for room ${roomId}`)
+        console.log(`✅ Recording started for room ${roomId}`)
       } else {
         socket.emit("recording-start-response", { success: false, error: "Recording already in progress" })
       }
@@ -374,7 +374,7 @@ io.on("connection", (socket) => {
   // Stop recording
   socket.on("stop-recording", (data) => {
     const { roomId } = data
-    // console.log(`⏹️ Stop recording request for room ${roomId}`)
+    console.log(`⏹️ Stop recording request for room ${roomId}`)
 
     if (rooms.has(roomId)) {
       const room = rooms.get(roomId)
@@ -407,9 +407,9 @@ io.on("connection", (socket) => {
           })
         }
 
-        // console.log(
-        //   `✅ Recording stopped for room ${roomId}. File: ${recordingData.filename} (${recordingData.size} bytes)`,
-        // )
+        console.log(
+          `✅ Recording stopped for room ${roomId}. File: ${recordingData.filename} (${recordingData.size} bytes)`,
+        )
       } else {
         io.to(roomId).emit("recording-stop-response", { success: false, error: "No recording in progress" })
       }
@@ -464,7 +464,7 @@ io.on("connection", (socket) => {
   // Get current recording
   socket.on("get-recording", (data) => {
     const { roomId } = data
-    // console.log(`📥 Get recording request for room ${roomId}`)
+    console.log(`📥 Get recording request for room ${roomId}`)
 
     if (rooms.has(roomId)) {
       const room = rooms.get(roomId)
@@ -483,7 +483,7 @@ io.on("connection", (socket) => {
           mimeType: "audio/webm",
           totalChunks: room.recordingChunks.length,
         })
-        // console.log(`📤 Sent current recording for room ${roomId} (${combinedBuffer.length} bytes)`)
+        console.log(`📤 Sent current recording for room ${roomId} (${combinedBuffer.length} bytes)`)
       } else {
         // Send to all users in the room
         io.to(roomId).emit("get-recording-response", {
@@ -493,7 +493,7 @@ io.on("connection", (socket) => {
           mimeType: "audio/webm",
           totalChunks: 0,
         })
-        // console.log(`⚠️ No recording data available for room ${roomId}`)
+        console.log(`⚠️ No recording data available for room ${roomId}`)
       }
     } else {
       io.to(roomId).emit("get-recording-response", { success: false, error: "Room not found" })
@@ -504,7 +504,7 @@ io.on("connection", (socket) => {
   socket.on("webrtc-offer", (data) => {
     const { roomId, targetUserId, offer } = data
     const fromUserId = userSockets.get(socket.id)?.userId
-    // console.log(`🤝 WebRTC offer from ${fromUserId} to ${targetUserId} in room ${roomId}`)
+    console.log(`🤝 WebRTC offer from ${fromUserId} to ${targetUserId} in room ${roomId}`)
 
     // Find target user's socket
     const targetUser = Array.from(rooms.get(roomId)?.users.values() || []).find(
@@ -519,7 +519,7 @@ io.on("connection", (socket) => {
         offer,
       })
     } else {
-      // console.log(`⚠️ Target user ${targetUserId} not found in room ${roomId}`)
+      console.log(`⚠️ Target user ${targetUserId} not found in room ${roomId}`)
       socket.emit("webrtc-error", {
         error: "Target user not found",
         targetUserId,
@@ -530,7 +530,7 @@ io.on("connection", (socket) => {
   socket.on("webrtc-answer", (data) => {
     const { roomId, targetUserId, answer } = data
     const fromUserId = userSockets.get(socket.id)?.userId
-    // console.log(`🤝 WebRTC answer from ${fromUserId} to ${targetUserId} in room ${roomId}`)
+    console.log(`🤝 WebRTC answer from ${fromUserId} to ${targetUserId} in room ${roomId}`)
 
     // Find target user's socket
     const targetUser = Array.from(rooms.get(roomId)?.users.values() || []).find(
@@ -545,7 +545,7 @@ io.on("connection", (socket) => {
         answer,
       })
     } else {
-      // console.log(`⚠️ Target user ${targetUserId} not found in room ${roomId}`)
+      console.log(`⚠️ Target user ${targetUserId} not found in room ${roomId}`)
       socket.emit("webrtc-error", {
         error: "Target user not found",
         targetUserId,
@@ -559,7 +559,7 @@ io.on("connection", (socket) => {
 
     // Validate candidate data
     if (!candidate || !candidate.candidate) {
-      // console.log(`⚠️ Invalid ICE candidate from ${fromUserId} to ${targetUserId}`)
+      console.log(`⚠️ Invalid ICE candidate from ${fromUserId} to ${targetUserId}`)
       return
     }
 
@@ -583,9 +583,9 @@ io.on("connection", (socket) => {
       })
 
       // Log only unique candidates
-      // console.log(`🧊 ICE candidate from ${fromUserId} to ${targetUserId} in room ${roomId} (type: ${candidate.candidate.split(' ')[0]})`)
+      console.log(`🧊 ICE candidate from ${fromUserId} to ${targetUserId} in room ${roomId} (type: ${candidate.candidate.split(' ')[0]})`)
     } else {
-      // console.log(`⚠️ Target user ${targetUserId} not found in room ${roomId}`)
+      console.log(`⚠️ Target user ${targetUserId} not found in room ${roomId}`)
       socket.emit("webrtc-error", {
         error: "Target user not found",
         targetUserId,
@@ -597,7 +597,7 @@ io.on("connection", (socket) => {
   socket.on("webrtc-connection-state", (data) => {
     const { roomId, targetUserId, state } = data
     const fromUserId = userSockets.get(socket.id)?.userId
-    // console.log(`🔄 WebRTC connection state from ${fromUserId} to ${targetUserId}: ${state}`)
+    console.log(`🔄 WebRTC connection state from ${fromUserId} to ${targetUserId}: ${state}`)
 
     // Find target user's socket
     const targetUser = Array.from(rooms.get(roomId)?.users.values() || []).find(
@@ -619,7 +619,7 @@ io.on("connection", (socket) => {
   socket.on("webrtc-cleanup", (data) => {
     const { roomId, targetUserId } = data
     const fromUserId = userSockets.get(socket.id)?.userId
-    // console.log(`🧹 WebRTC cleanup from ${fromUserId} to ${targetUserId} in room ${roomId}`)
+    console.log(`🧹 WebRTC cleanup from ${fromUserId} to ${targetUserId} in room ${roomId}`)
 
     // Find target user's socket
     const targetUser = Array.from(rooms.get(roomId)?.users.values() || []).find(
@@ -638,7 +638,7 @@ io.on("connection", (socket) => {
 
   // Handle disconnect - IMPROVED VERSION
   socket.on("disconnect", (reason) => {
-    // console.log(`❌ User disconnected: ${socket.id}, reason: ${reason}`)
+    console.log(`❌ User disconnected: ${socket.id}, reason: ${reason}`)
 
     const userInfo = userSockets.get(socket.id)
 
@@ -675,10 +675,10 @@ io.on("connection", (socket) => {
         // Clean up empty rooms
         if (room.getUserCount() === 0) {
           if (room.isRecording) {
-            // console.log(`⏹️ Stopping recording for empty room ${roomId} after disconnect`)
+            console.log(`⏹️ Stopping recording for empty room ${roomId} after disconnect`)
             const recordingData = stopRoomRecording(roomId)
             if (recordingData.size > 0) {
-              // console.log(`💾 Final recording saved: ${recordingData.filename} (${recordingData.size} bytes)`)
+              console.log(`💾 Final recording saved: ${recordingData.filename} (${recordingData.size} bytes)`)
             }
           }
           rooms.delete(roomId)
@@ -686,9 +686,9 @@ io.on("connection", (socket) => {
           const roomFolder = getRoomFolder(roomId)
           if (fs.existsSync(roomFolder)) {
             fs.rmSync(roomFolder, { recursive: true, force: true })
-            // console.log(`🗑️ Room folder deleted: ${roomFolder}`)
+            console.log(`🗑️ Room folder deleted: ${roomFolder}`)
           }
-          // console.log(`🗑️ Room ${roomId} deleted (empty after disconnect)`)
+          console.log(`🗑️ Room ${roomId} deleted (empty after disconnect)`)
         }
       }
 
@@ -711,23 +711,6 @@ io.on("connection", (socket) => {
       socket.emit("room-info-response", { error: "Room not found" })
     }
   })
-
-  // Add this inside io.on('connection', (socket) => { ... })
-  socket.on("mic-level", (data) => {
-    const { roomId, userId, level } = data;
-    if (!roomId || !userId || typeof level !== "number") return;
-    // console.log(`[mic-level] from ${userId} in room ${roomId}:`, level); // Debug log
-    // Broadcast to all other users in the room
-    socket.to(roomId).emit("peer-mic-level", { userId, level });
-  });
-
-  // Handle user mute state
-  socket.on("user-mute-state", (data) => {
-    const { roomId, userId, isMuted } = data;
-    if (!roomId || !userId || typeof isMuted !== "boolean") return;
-    // Broadcast to all other users in the room
-    socket.to(roomId).emit("peer-mute-state", { userId, isMuted });
-  });
 })
 
 // Helper function to stop room recording
@@ -744,7 +727,7 @@ function stopRoomRecording(roomId) {
       }
     }
 
-    // console.log(`⏹️ Stopping recording for room ${roomId}. Total chunks: ${room.recordingChunks.length}`)
+    console.log(`⏹️ Stopping recording for room ${roomId}. Total chunks: ${room.recordingChunks.length}`)
 
     if (room.recordingChunks.length > 0) {
       // Mix all user files with ffmpeg, padding late joiners
@@ -760,7 +743,7 @@ function stopRoomRecording(roomId) {
             const { execSync } = require('child_process');
             execSync(`ffmpeg -y -i "${userFile.filePath}" -af "adelay=${userFile.offset}|${userFile.offset}" "${paddedPath}"`);
           } catch (e) {
-            // console.error('❌ Error padding user file:', e);
+            console.error('❌ Error padding user file:', e);
             paddedPath = userFile.filePath; // fallback
           }
         }
@@ -797,11 +780,11 @@ function stopRoomRecording(roomId) {
             activeUsers: Array.from(room.activeUsers)
           }
         } catch (error) {
-          // console.error('❌ Error mixing audio with ffmpeg:', error)
+          console.error('❌ Error mixing audio with ffmpeg:', error)
         }
       }
     } else {
-      // console.log(`⚠️ No audio chunks to save for room ${roomId}`)
+      console.log(`⚠️ No audio chunks to save for room ${roomId}`)
     }
   }
 
@@ -855,7 +838,7 @@ app.get("/api/recordings", (req, res) => {
     files = files.sort((a, b) => b.created - a.created)
     res.json({ recordings: files })
   } catch (error) {
-    // console.error("❌ Error listing recordings:", error)
+    console.error("❌ Error listing recordings:", error)
     res.status(500).json({ error: "Failed to list recordings" })
   }
 })
@@ -899,7 +882,7 @@ app.delete("/api/recordings/:filename", (req, res) => {
       res.status(404).json({ error: "Recording not found" })
     }
   } catch (error) {
-    // console.error("❌ Error deleting recording:", error)
+    console.error("❌ Error deleting recording:", error)
     res.status(500).json({ error: "Failed to delete recording" })
   }
 })
@@ -937,33 +920,33 @@ const PORT = process.env.PORT || 3001
 
 server.listen(PORT, "0.0.0.0", () => {
   const protocol = useHTTPS ? "https" : "http"
-  // console.log(`🚀 Voice chat server running on ${protocol}://localhost:${PORT}`)
-  // console.log(`📁 Recordings will be saved to: ${recordingsDir}`)
-  // console.log(`🏥 Health check available at: ${protocol}://localhost:${PORT}/health`)
-  // console.log(`🧪 Test endpoint available at: ${protocol}://localhost:${PORT}/test`)
-  // console.log(`📊 API endpoints available at: ${protocol}://localhost:${PORT}/api/rooms`)
+  console.log(`🚀 Voice chat server running on ${protocol}://localhost:${PORT}`)
+  console.log(`📁 Recordings will be saved to: ${recordingsDir}`)
+  console.log(`🏥 Health check available at: ${protocol}://localhost:${PORT}/health`)
+  console.log(`🧪 Test endpoint available at: ${protocol}://localhost:${PORT}/test`)
+  console.log(`📊 API endpoints available at: ${protocol}://localhost:${PORT}/api/rooms`)
 
   if (useHTTPS) {
-    // console.log(`🔒 HTTPS enabled with self-signed certificate`)
-    // console.log(`📱 Mobile devices can connect (may need to accept certificate)`)
+    console.log(`🔒 HTTPS enabled with self-signed certificate`)
+    console.log(`📱 Mobile devices can connect (may need to accept certificate)`)
   } else {
-    // console.log(`🔓 HTTP mode - for HTTPS, set USE_HTTPS=true`)
+    console.log(`🔓 HTTP mode - for HTTPS, set USE_HTTPS=true`)
   }
 })
 
 // Graceful shutdown
 process.on("SIGTERM", () => {
-  // console.log("SIGTERM received, shutting down gracefully")
+  console.log("SIGTERM received, shutting down gracefully")
   server.close(() => {
-    // console.log("Server closed")
+    console.log("Server closed")
     process.exit(0)
   })
 })
 
 process.on("SIGINT", () => {
-  // console.log("SIGINT received, shutting down gracefully")
+  console.log("SIGINT received, shutting down gracefully")
   server.close(() => {
-    // console.log("Server closed")
+    console.log("Server closed")
     process.exit(0)
   })
 })
